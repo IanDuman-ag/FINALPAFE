@@ -365,6 +365,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header("Location: ?page=attendance&success=Attendance record deleted successfully.");
             exit;
         }
+
+        // Handle attendance approval/rejection
+        if ($action === 'approve_attendance') {
+            $id = filter_var($_POST['attendance_id'] ?? '', FILTER_VALIDATE_INT);
+            if (!$id) {
+                header("Location: ?page=attendance&error=Invalid attendance ID.");
+                exit;
+            }
+            $stmt = $pdo->prepare("UPDATE attendance SET status = 'Approved' WHERE id = ?");
+            $stmt->execute([$id]);
+            header("Location: ?page=attendance&success=Attendance approved successfully.");
+            exit;
+        }
+
+        if ($action === 'reject_attendance') {
+            $id = filter_var($_POST['attendance_id'] ?? '', FILTER_VALIDATE_INT);
+            if (!$id) {
+                header("Location: ?page=attendance&error=Invalid attendance ID.");
+                exit;
+            }
+            $stmt = $pdo->prepare("UPDATE attendance SET status = 'Rejected' WHERE id = ?");
+            $stmt->execute([$id]);
+            header("Location: ?page=attendance&success=Attendance rejected successfully.");
+            exit;
+        }
     } catch (PDOException $e) {
         error_log("Error in CRUD operation: " . $e->getMessage());
         header("Location: ?page=" . ($_GET['page'] ?? 'home') . "&error=An error occurred. Please try again.");
@@ -403,10 +428,27 @@ try {
 
 // Fetch all attendance records with event names
 try {
-    $stmt = $pdo->query("SELECT a.*, e.event_name FROM attendance a LEFT JOIN events e ON a.event_id = e.id ORDER BY a.fullname");
+    $stmt = $pdo->query("
+        SELECT a.*, e.event_name, e.event_date, e.event_time 
+        FROM attendance a 
+        LEFT JOIN events e ON a.event_id = e.id 
+        ORDER BY a.created_at DESC
+    ");
     $attendances = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Calculate statistics
+    $total_count = count($attendances);
+    $pending_count = count(array_filter($attendances, function($a) { 
+        return strtolower($a['status']) === 'pending'; 
+    }));
+    $approved_count = count(array_filter($attendances, function($a) { 
+        return strtolower($a['status']) === 'approved'; 
+    }));
 } catch (PDOException $e) {
     $attendances = [];
+    $total_count = 0;
+    $pending_count = 0;
+    $approved_count = 0;
     error_log("Error fetching attendance: " . $e->getMessage());
 }
 
@@ -961,184 +1003,264 @@ foreach ($events as $event) {
             <?php if (isset($error)): ?>
                 <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
-            <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#createAttendanceModal">Add Attendance</button>
-            <div class="modal fade" id="createAttendanceModal" tabindex="-1" aria-labelledby="createAttendanceModalLabel" aria-hidden="true">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title" id="createAttendanceModalLabel">Add Attendance</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+
+            <!-- Attendance Statistics -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card bg-primary text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Total Attendance</h5>
+                            <h2 class="card-text"><?php echo $total_count; ?></h2>
+                            <p class="card-text">All attendance records</p>
                         </div>
-                        <form method="POST" id="createAttendanceForm">
-                            <div class="modal-body">
-                                <input type="hidden" name="action" value="create_attendance">
-                                <div class="mb-3">
-                                    <label for="event_id" class="form-label">Event</label>
-                                    <select class="form-select" id="event_id" name="event_id" required>
-                                        <option value="">Select Event</option>
-                                        <?php foreach ($events as $event): ?>
-                                            <?php if (!isset($event['id'])) continue; ?>
-                                            <option value="<?php echo htmlspecialchars($event['id']); ?>"><?php echo htmlspecialchars($event['event_name'] ?? ''); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="fullname" class="form-label">Full Name</label>
-                                    <input type="text" class="form-control" id="fullname" name="fullname" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="gender" class="form-label">Gender</label>
-                                    <select class="form-select" id="gender" name="gender" required>
-                                        <option value="Male">Male</option>
-                                        <option value="Female">Female</option>
-                                        <option value="Other">Other</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="year_level" class="form-label">Year Level</label>
-                                    <input type="text" class="form-control" id="year_level" name="year_level" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="section" class="form-label">Section</label>
-                                    <input type="text" class="form-control" id="section" name="section" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="status" class="form-label">Status</label>
-                                    <select class="form-select" id="status" name="status" required>
-                                        <option value="Decline">Decline</option>
-                                        <option value="Accepted">Accepted</option>
-                                        <option value="Rejected">Rejected</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                                <button type="submit" class="btn btn-primary">Add Attendance</button>
-                            </div>
-                        </form>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-warning text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Pending Approvals</h5>
+                            <h2 class="card-text"><?php echo $pending_count; ?></h2>
+                            <p class="card-text">Awaiting admin approval</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-success text-white">
+                        <div class="card-body">
+                            <h5 class="card-title">Approved Attendance</h5>
+                            <h2 class="card-text"><?php echo $approved_count; ?></h2>
+                            <p class="card-text">Successfully approved records</p>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="row">
-                <?php foreach ($attendances as $attendance): ?>
-                    <?php if (!isset($attendance['id'])) continue; ?>
-                    <div class="col-md-6 col-lg-4" key="<?php echo htmlspecialchars($attendance['id']); ?>">
-                        <div class="attendance-card" data-bs-toggle="modal" data-bs-target="#detailsAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>">
-                            <h5><?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></h5>
-                            <p><strong>Event:</strong> <?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></p>
-                            <p><strong>Gender:</strong> <?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></p>
-                            <p><strong>Year Level:</strong> <?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></p>
-                            <p><strong>Section:</strong> <?php echo htmlspecialchars($attendance['section'] ?? ''); ?></p>
-                            <p><strong>Status:</strong> <span class="status-<?php echo strtolower($attendance['status'] ?? ''); ?>"><?php echo htmlspecialchars($attendance['status'] ?? ''); ?></span></p>
-                            <div class="d-flex justify-content-between">
-                                <button class="btn btn-info btn-sm action-btn" data-bs-toggle="modal" data-bs-target="#detailsAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>">Details</button>
-                                <button class="btn btn-warning btn-sm action-btn" data-bs-toggle="modal" data-bs-target="#editAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>">Edit</button>
-                                <button class="btn btn-danger btn-sm action-btn" data-bs-toggle="modal" data-bs-target="#deleteAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>">Delete</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal fade" id="detailsAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-labelledby="detailsAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>" aria-hidden="true">
-                        <div class="modal-dialog">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title" id="detailsAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>">Attendance Details</h5>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                </div>
-                                <div class="modal-body">
-                                    <p><strong>Full Name:</strong> <?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></p>
-                                    <p><strong>Event:</strong> <?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></p>
-                                    <p><strong>Gender:</strong> <?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></p>
-                                    <p><strong>Year Level:</strong> <?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></p>
-                                    <p><strong>Section:</strong> <?php echo htmlspecialchars($attendance['section'] ?? ''); ?></p>
-                                    <p><strong>Status:</strong> <span class="status-<?php echo strtolower($attendance['status'] ?? ''); ?>"><?php echo htmlspecialchars($attendance['status'] ?? ''); ?></span></p>
-                                    <p><strong>Created At:</strong> <?php echo htmlspecialchars($attendance['created_at'] ?? ''); ?></p>
-                                </div>
-                                <div class="modal-footer">
-                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal fade" id="editAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-labelledby="editAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>" aria-hidden="true">
-                        <div class="modal-dialog">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title" id="editAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>">Edit Attendance</h5>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                </div>
-                                <form method="POST">
-                                    <div class="modal-body">
-                                        <input type="hidden" name="action" value="update_attendance">
-                                        <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
-                                        <div class="mb-3">
-                                            <label for="event_id_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Event</label>
-                                            <select class="form-select" id="event_id_<?php echo htmlspecialchars($attendance['id']); ?>" name="event_id" required>
-                                                <option value="">Select Event</option>
-                                                <?php foreach ($events as $event): ?>
-                                                    <?php if (!isset($event['id'])) continue; ?>
-                                                    <option value="<?php echo htmlspecialchars($event['id']); ?>" <?php echo isset($attendance['event_id']) && $attendance['event_id'] == $event['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($event['event_name'] ?? ''); ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                        </div>
-                                        <div class="mb-3">
-                                            <label for="fullname_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Full Name</label>
-                                            <input type="text" class="form-control" id="fullname_<?php echo htmlspecialchars($attendance['id']); ?>" name="fullname" value="<?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?>" required>
-                                        </div>
-                                        <div class="mb-3">
-                                            <label for="gender_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Gender</label>
-                                            <select class="form-select" id="gender_<?php echo htmlspecialchars($attendance['id']); ?>" name="gender" required>
-                                                <option value="Male" <?php echo ($attendance['gender'] ?? '') === 'Male' ? 'selected' : ''; ?>>Male</option>
-                                                <option value="Female" <?php echo ($attendance['gender'] ?? '') === 'Female' ? 'selected' : ''; ?>>Female</option>
-                                                <option value="Other" <?php echo ($attendance['gender'] ?? '') === 'Other' ? 'selected' : ''; ?>>Other</option>
-                                            </select>
-                                        </div>
-                                        <div class="mb-3">
-                                            <label for="year_level_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Year Level</label>
-                                            <input type="text" class="form-control" id="year_level_<?php echo htmlspecialchars($attendance['id']); ?>" name="year_level" value="<?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?>" required>
-                                        </div>
-                                        <div class="mb-3">
-                                            <label for="section_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Section</label>
-                                            <input type="text" class="form-control" id="section_<?php echo htmlspecialchars($attendance['id']); ?>" name="section" value="<?php echo htmlspecialchars($attendance['section'] ?? ''); ?>" required>
-                                        </div>
-                                        <div class="mb-3">
-                                            <label for="status_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Status</label>
-                                            <select class="form-select" id="status_<?php echo htmlspecialchars($attendance['id']); ?>" name="status" required>
-                                                <option value="Decline" <?php echo ($attendance['status'] ?? '') === 'Decline' ? 'selected' : ''; ?>>Decline</option>
-                                                <option value="Accepted" <?php echo ($attendance['status'] ?? '') === 'Accepted' ? 'selected' : ''; ?>>Accepted</option>
-                                                <option value="Rejected" <?php echo ($attendance['status'] ?? '') === 'Rejected' ? 'selected' : ''; ?>>Rejected</option>
-                                            </select>
+
+            <!-- Filter Buttons -->
+            <div class="mb-3">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-outline-primary active" onclick="filterAttendance('all')">All</button>
+                    <button type="button" class="btn btn-outline-warning" onclick="filterAttendance('pending')">Pending</button>
+                    <button type="button" class="btn btn-outline-success" onclick="filterAttendance('approved')">Approved</button>
+                    <button type="button" class="btn btn-outline-danger" onclick="filterAttendance('rejected')">Rejected</button>
+                </div>
+            </div>
+
+            <!-- Attendance Table -->
+            <div class="table-responsive">
+                <table class="table table-striped table-hover" id="attendanceTable">
+                    <thead>
+                        <tr>
+                            <th>Full Name</th>
+                            <th>Event</th>
+                            <th>Gender</th>
+                            <th>Year Level</th>
+                            <th>Section</th>
+                            <th>Status</th>
+                            <th>Created At</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($attendances)): ?>
+                            <tr>
+                                <td colspan="8" class="text-center">No attendance records found.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($attendances as $attendance): ?>
+                                <?php if (!isset($attendance['id'])) continue; ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></td>
+                                    <td><?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></td>
+                                    <td><?php echo htmlspecialchars($attendance['section'] ?? ''); ?></td>
+                                    <td>
+                                        <span class="badge <?php 
+                                            switch(strtolower($attendance['status'] ?? '')) {
+                                                case 'approved':
+                                                    echo 'bg-success';
+                                                    break;
+                                                case 'pending':
+                                                    echo 'bg-warning';
+                                                    break;
+                                                case 'rejected':
+                                                    echo 'bg-danger';
+                                                    break;
+                                                default:
+                                                    echo 'bg-secondary';
+                                            }
+                                        ?>">
+                                            <?php echo htmlspecialchars($attendance['status'] ?? ''); ?>
+                                        </span>
+                                    </td>
+                                    <td><?php echo htmlspecialchars($attendance['created_at'] ?? ''); ?></td>
+                                    <td>
+                                        <?php if (strtolower($attendance['status']) === 'pending'): ?>
+                                            <div class="btn-group" role="group">
+                                                <form method="POST" style="display:inline;">
+                                                    <input type="hidden" name="action" value="approve_attendance">
+                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
+                                                    <button type="submit" class="btn btn-success btn-sm" title="Approve">
+                                                        <i class="fas fa-check"></i>
+                                                    </button>
+                                                </form>
+                                                <form method="POST" style="display:inline;">
+                                                    <input type="hidden" name="action" value="reject_attendance">
+                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
+                                                    <button type="submit" class="btn btn-danger btn-sm" title="Reject">
+                                                        <i class="fas fa-times"></i>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        <?php endif; ?>
+                                        <button class="btn btn-info btn-sm" data-bs-toggle="modal" data-bs-target="#detailsAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" title="View Details">
+                                            <i class="fas fa-eye"></i>
+                                        </button>
+                                        <button class="btn btn-warning btn-sm" data-bs-toggle="modal" data-bs-target="#editAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" title="Edit">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" title="Delete">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+
+                                <!-- Details Modal -->
+                                <div class="modal fade" id="detailsAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-hidden="true">
+                                    <div class="modal-dialog">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">Attendance Details</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <p><strong>Full Name:</strong> <?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></p>
+                                                <p><strong>Event:</strong> <?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></p>
+                                                <p><strong>Gender:</strong> <?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></p>
+                                                <p><strong>Year Level:</strong> <?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></p>
+                                                <p><strong>Section:</strong> <?php echo htmlspecialchars($attendance['section'] ?? ''); ?></p>
+                                                <p><strong>Status:</strong> 
+                                                    <span class="badge <?php 
+                                                        switch(strtolower($attendance['status'] ?? '')) {
+                                                            case 'approved':
+                                                                echo 'bg-success';
+                                                                break;
+                                                            case 'pending':
+                                                                echo 'bg-warning';
+                                                                break;
+                                                            case 'rejected':
+                                                                echo 'bg-danger';
+                                                                break;
+                                                            default:
+                                                                echo 'bg-secondary';
+                                                        }
+                                                    ?>">
+                                                        <?php echo htmlspecialchars($attendance['status'] ?? ''); ?>
+                                                    </span>
+                                                </p>
+                                                <p><strong>Created At:</strong> <?php echo htmlspecialchars($attendance['created_at'] ?? ''); ?></p>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="modal-footer">
-                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                                        <button type="submit" class="btn btn-primary">Update Attendance</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal fade" id="deleteAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-labelledby="deleteAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>" aria-hidden="true">
-                        <div class="modal-dialog">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title" id="deleteAttendanceModalLabel<?php echo htmlspecialchars($attendance['id']); ?>">Delete Attendance</h5>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                                 </div>
-                                <form method="POST">
-                                    <div class="modal-body">
-                                        <input type="hidden" name="action" value="delete_attendance">
-                                        <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
-                                        <p>Are you sure you want to delete the attendance record for "<strong><?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></strong>"?</p>
+
+                                <!-- Edit Modal -->
+                                <div class="modal fade" id="editAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-hidden="true">
+                                    <div class="modal-dialog">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">Edit Attendance</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                            </div>
+                                            <form method="POST">
+                                                <div class="modal-body">
+                                                    <input type="hidden" name="action" value="update_attendance">
+                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="fullname_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Full Name</label>
+                                                        <input type="text" class="form-control" id="fullname_<?php echo htmlspecialchars($attendance['id']); ?>" name="fullname" value="<?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?>" required>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="event_id_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Event</label>
+                                                        <select class="form-select" id="event_id_<?php echo htmlspecialchars($attendance['id']); ?>" name="event_id" required>
+                                                            <?php foreach ($events as $event): ?>
+                                                                <option value="<?php echo htmlspecialchars($event['id']); ?>" <?php echo ($attendance['event_id'] == $event['id']) ? 'selected' : ''; ?>>
+                                                                    <?php echo htmlspecialchars($event['event_name']); ?>
+                                                                </option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="gender_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Gender</label>
+                                                        <select class="form-select" id="gender_<?php echo htmlspecialchars($attendance['id']); ?>" name="gender" required>
+                                                            <option value="Male" <?php echo ($attendance['gender'] == 'Male') ? 'selected' : ''; ?>>Male</option>
+                                                            <option value="Female" <?php echo ($attendance['gender'] == 'Female') ? 'selected' : ''; ?>>Female</option>
+                                                            <option value="Other" <?php echo ($attendance['gender'] == 'Other') ? 'selected' : ''; ?>>Other</option>
+                                                        </select>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="year_level_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Year Level</label>
+                                                        <input type="text" class="form-control" id="year_level_<?php echo htmlspecialchars($attendance['id']); ?>" name="year_level" value="<?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?>" required>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="section_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Section</label>
+                                                        <input type="text" class="form-control" id="section_<?php echo htmlspecialchars($attendance['id']); ?>" name="section" value="<?php echo htmlspecialchars($attendance['section'] ?? ''); ?>" required>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <label for="status_<?php echo htmlspecialchars($attendance['id']); ?>" class="form-label">Status</label>
+                                                        <select class="form-select" id="status_<?php echo htmlspecialchars($attendance['id']); ?>" name="status" required>
+                                                            <option value="Pending" <?php echo ($attendance['status'] == 'Pending') ? 'selected' : ''; ?>>Pending</option>
+                                                            <option value="Approved" <?php echo ($attendance['status'] == 'Approved') ? 'selected' : ''; ?>>Approved</option>
+                                                            <option value="Rejected" <?php echo ($attendance['status'] == 'Rejected') ? 'selected' : ''; ?>>Rejected</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                                    <button type="submit" class="btn btn-primary">Update Attendance</button>
+                                                </div>
+                                            </form>
+                                        </div>
                                     </div>
-                                    <div class="modal-footer">
-                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                        <button type="submit" class="btn btn-danger">Delete</button>
+                                </div>
+
+                                <!-- Delete Modal -->
+                                <div class="modal fade" id="deleteAttendanceModal<?php echo htmlspecialchars($attendance['id']); ?>" tabindex="-1" aria-hidden="true">
+                                    <div class="modal-dialog">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">Delete Attendance</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                            </div>
+                                            <form method="POST">
+                                                <div class="modal-body">
+                                                    <input type="hidden" name="action" value="delete_attendance">
+                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
+                                                    <p>Are you sure you want to delete this attendance record?</p>
+                                                    <p><strong>Full Name:</strong> <?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></p>
+                                                    <p><strong>Event:</strong> <?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></p>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    <button type="submit" class="btn btn-danger">Delete</button>
+                                                </div>
+                                            </form>
+                                        </div>
                                     </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
             </div>
         <?php elseif ($page === 'feedback'): ?>
             <h2>Feedback Records</h2>
@@ -1387,6 +1509,44 @@ foreach ($events as $event) {
             } else {
                 console.error('Calendar element not found.');
             }
+        });
+
+        function filterAttendance(status) {
+            const table = document.getElementById('attendanceTable');
+            const rows = table.getElementsByTagName('tr');
+            
+            // Update active button
+            document.querySelectorAll('.btn-group .btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // Show/hide rows based on status
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const statusCell = row.querySelector('td:nth-child(6)');
+                
+                if (status === 'all') {
+                    row.style.display = '';
+                } else {
+                    const rowStatus = statusCell.textContent.trim().toLowerCase();
+                    row.style.display = rowStatus === status ? '' : 'none';
+                }
+            }
+        }
+
+        // Add animation to statistics cards
+        document.addEventListener('DOMContentLoaded', function() {
+            const cards = document.querySelectorAll('.card');
+            cards.forEach(card => {
+                card.style.transition = 'transform 0.3s ease';
+                card.addEventListener('mouseover', function() {
+                    this.style.transform = 'scale(1.05)';
+                });
+                card.addEventListener('mouseout', function() {
+                    this.style.transform = 'scale(1)';
+                });
+            });
         });
     </script>
 </body>

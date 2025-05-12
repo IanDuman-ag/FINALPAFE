@@ -104,19 +104,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            // Check for duplicate attendance
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM attendance WHERE fullname = ? AND section = ? AND event_id = ?");
-            $stmt->execute([$fullname, $section, $event_id]);
-            if ($stmt->fetchColumn() > 0) {
-                header("Location: ?page=attendance&error=An attendance record for this person in this section for this event already exists.");
+            try {
+                // Check for duplicate attendance
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM attendance WHERE fullname = ? AND event_id = ?");
+                $stmt->execute([$fullname, $event_id]);
+                if ($stmt->fetchColumn() > 0) {
+                    header("Location: ?page=attendance&error=You have already submitted attendance for this event.");
+                    exit;
+                }
+
+                // Insert new attendance record
+                $stmt = $pdo->prepare("
+                    INSERT INTO attendance (fullname, gender, year_level, section, status, event_id, created_at) 
+                    VALUES (?, ?, ?, ?, 'Pending', ?, NOW())
+                ");
+                $stmt->execute([$fullname, $gender, $year_level, $section, $event_id]);
+                
+                header("Location: ?page=attendance&success=Attendance submitted successfully. Awaiting admin approval.");
+                exit;
+            } catch (PDOException $e) {
+                error_log("Error submitting attendance: " . $e->getMessage());
+                header("Location: ?page=attendance&error=An error occurred. Please try again.");
                 exit;
             }
-
-            // Insert new attendance record
-            $stmt = $pdo->prepare("INSERT INTO attendance (fullname, gender, year_level, section, status, event_id, created_at) VALUES (?, ?, ?, ?, 'Pending', ?, NOW())");
-            $stmt->execute([$fullname, $gender, $year_level, $section, $event_id]);
-            header("Location: ?page=attendance&success=Attendance submitted successfully. Awaiting admin approval.");
-            exit;
         }
 
         // Admin Approve Attendance
@@ -253,10 +263,21 @@ try {
 try {
     if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']) {
         // Admins see all attendance records
-        $stmt = $pdo->query("SELECT a.*, e.event_name FROM attendance a LEFT JOIN events e ON a.event_id = e.id ORDER BY a.created_at DESC");
+        $stmt = $pdo->query("
+            SELECT a.*, e.event_name, e.event_date, e.event_time 
+            FROM attendance a 
+            LEFT JOIN events e ON a.event_id = e.id 
+            ORDER BY a.created_at DESC
+        ");
     } else {
-        // Regular users see only their approved records
-        $stmt = $pdo->prepare("SELECT a.*, e.event_name FROM attendance a LEFT JOIN events e ON a.event_id = e.id WHERE a.fullname = ? AND a.status = 'Approved' ORDER BY a.created_at DESC");
+        // Regular users see their records (all statuses)
+        $stmt = $pdo->prepare("
+            SELECT a.*, e.event_name, e.event_date, e.event_time 
+            FROM attendance a 
+            LEFT JOIN events e ON a.event_id = e.id 
+            WHERE a.fullname = ? 
+            ORDER BY a.created_at DESC
+        ");
         $stmt->execute([$_SESSION['user_name']]);
     }
     $attendances = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -711,66 +732,67 @@ ob_end_clean();
                     <?php endforeach; ?>
                 <?php endif; ?>
             </div>
-            <!-- Attendance Table -->
-            <h3>Your Attendance Records</h3>
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead>
-                        <tr>
-                            <th>Full Name</th>
-                            <th>Event</th>
-                            <th>Gender</th>
-                            <th>Year Level</th>
-                            <th>Section</th>
-                            <th>Status</th>
-                            <th>Created At</th>
-                            <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
-                                <th>Actions</th>
-                            <?php endif; ?>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($attendances)): ?>
-                            <tr>
-                                <td colspan="<?php echo (isset($_SESSION['is_admin']) && $_SESSION['is_admin']) ? 8 : 7; ?>" class="text-center">No attendance records found.</td>
-                            </tr>
-                        <?php else: ?>
-                            <?php foreach ($attendances as $attendance): ?>
-                                <?php if (!isset($attendance['id'])) continue; ?>
+            <!-- Attendance Records Table -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Attendance Records</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
                                 <tr>
-                                    <td><?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($attendance['event_name'] ?? 'No Event'); ?></td>
-                                    <td><?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></td>
-                                    <td><?php echo htmlspecialchars($attendance['section'] ?? ''); ?></td>
-                                    <td><span class="status-<?php echo strtolower($attendance['status'] ?? ''); ?>"><?php echo htmlspecialchars($attendance['status'] ?? ''); ?></span></td>
-                                    <td><?php echo htmlspecialchars($attendance['created_at'] ?? ''); ?></td>
-                                    <?php if (isset($_SESSION['is_admin']) && $_SESSION['is_admin']): ?>
-                                        <td>
-                                            <?php if ($attendance['status'] === 'Pending'): ?>
-                                                <form method="POST" style="display:inline;">
-                                                    <input type="hidden" name="action" value="approve_attendance">
-                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
-                                                    <button type="submit" class="btn btn-success btn-sm">Approve</button>
-                                                </form>
-                                                <form method="POST" style="display:inline;">
-                                                    <input type="hidden" name="action" value="reject_attendance">
-                                                    <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
-                                                    <button type="submit" class="btn btn-danger btn-sm">Reject</button>
-                                                </form>
-                                            <?php endif; ?>
-                                            <form method="POST" style="display:inline;">
-                                                <input type="hidden" name="action" value="delete_attendance">
-                                                <input type="hidden" name="attendance_id" value="<?php echo htmlspecialchars($attendance['id']); ?>">
-                                                <button type="submit" class="btn btn-warning btn-sm">Delete</button>
-                                            </form>
-                                        </td>
-                                    <?php endif; ?>
+                                    <th>Event</th>
+                                    <th>Full Name</th>
+                                    <th>Gender</th>
+                                    <th>Year Level</th>
+                                    <th>Section</th>
+                                    <th>Status</th>
+                                    <th>Created At</th>
                                 </tr>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($attendances)): ?>
+                                    <tr>
+                                        <td colspan="7" class="text-center">No attendance records found</td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($attendances as $attendance): ?>
+                                        <tr>
+                                            <td><?php echo htmlspecialchars($attendance['event_name'] ?? ''); ?></td>
+                                            <td><?php echo htmlspecialchars($attendance['fullname'] ?? ''); ?></td>
+                                            <td><?php echo htmlspecialchars($attendance['gender'] ?? ''); ?></td>
+                                            <td><?php echo htmlspecialchars($attendance['year_level'] ?? ''); ?></td>
+                                            <td><?php echo htmlspecialchars($attendance['section'] ?? ''); ?></td>
+                                            <td>
+                                                <?php
+                                                $statusClass = '';
+                                                switch($attendance['status']) {
+                                                    case 'Approved':
+                                                        $statusClass = 'success';
+                                                        break;
+                                                    case 'Pending':
+                                                        $statusClass = 'warning';
+                                                        break;
+                                                    case 'Rejected':
+                                                        $statusClass = 'danger';
+                                                        break;
+                                                    default:
+                                                        $statusClass = 'secondary';
+                                                }
+                                                ?>
+                                                <span class="badge bg-<?php echo $statusClass; ?>">
+                                                    <?php echo htmlspecialchars($attendance['status']); ?>
+                                                </span>
+                                            </td>
+                                            <td><?php echo date('M d, Y h:i A', strtotime($attendance['created_at'])); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
             <!-- Attendance Submission Modals -->
             <?php foreach ($events as $event): ?>
@@ -1006,6 +1028,17 @@ ob_end_clean();
                 calendar.render();
             }
         });
+    </script>
+    <script>
+    function checkAttendanceUpdates() {
+        // Refresh the page every 30 seconds to check for updates
+        setTimeout(function() {
+            location.reload();
+        }, 30000);
+    }
+
+    // Start checking for updates
+    checkAttendanceUpdates();
     </script>
 </body>
 </html>
